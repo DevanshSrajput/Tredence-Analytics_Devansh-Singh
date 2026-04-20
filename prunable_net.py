@@ -1,9 +1,9 @@
 """
 Self-Pruning Neural Network for CIFAR-10
-Tredence AI Engineering Internship Case Study · April 2026
+Tredence AI Engineering Internship Case Study - April 2026
 
-Each weight has a learnable sigmoid gate. L1 regularisation on gate values
-pushes them toward zero during training, pruning the network end-to-end.
+Each weight has a learnable sigmoid gate. L1 regularisation on the gate values
+pushes them toward zero while training, so the network prunes itself end to end.
 """
 
 import torch
@@ -27,12 +27,12 @@ SPARSITY_THRESHOLD = 1e-2
 
 class PrunableLinear(nn.Module):
     """
-    Linear layer where each weight is scaled by sigmoid(gate_score).
+    A linear layer where each weight is scaled by sigmoid(gate_score).
 
-    Forward:  output = F.linear(x, weight * sigmoid(gate_scores), bias)
+    In the forward pass, output = F.linear(x, weight * sigmoid(gate_scores), bias).
 
-    Gradients flow through both `weight` and `gate_scores` because
-    pruned_w = weight * sigmoid(gate_scores) keeps both in the graph.
+    Gradients still pass through both `weight` and `gate_scores`, since
+    pruned_w = weight * sigmoid(gate_scores) keeps both of them in the graph.
     """
 
     def __init__(self, in_features: int, out_features: int) -> None:
@@ -42,7 +42,7 @@ class PrunableLinear(nn.Module):
 
         self.weight      = nn.Parameter(torch.empty(out_features, in_features))
         self.bias        = nn.Parameter(torch.zeros(out_features))
-        # Init to 0.5 → sigmoid(0.5) ≈ 0.62: gates start open, pruned over time
+        # Start at 0.5, so sigmoid(0.5) is about 0.62. Gates begin open and get pruned over time.
         self.gate_scores = nn.Parameter(torch.full((out_features, in_features), 0.5))
 
         nn.init.kaiming_uniform_(self.weight, nonlinearity='relu')
@@ -51,7 +51,7 @@ class PrunableLinear(nn.Module):
         return F.linear(x, self.weight * torch.sigmoid(self.gate_scores), self.bias)
 
     def get_gates(self) -> torch.Tensor:
-        """Detached gate values for diagnostics — no gradient side-effects."""
+        """Detached gate values for diagnostics, with no gradient side effects."""
         return torch.sigmoid(self.gate_scores).detach()
 
     def extra_repr(self) -> str:
@@ -60,8 +60,8 @@ class PrunableLinear(nn.Module):
 
 class SelfPruningNet(nn.Module):
     """
-    4-layer feedforward net using only PrunableLinear.
-    Architecture: 3072 → 1024 → 512 → 256 → 10
+    A 4-layer feedforward net built only from PrunableLinear layers.
+    Architecture: 3072 -> 1024 -> 512 -> 256 -> 10.
     """
 
     def __init__(self) -> None:
@@ -89,25 +89,26 @@ def compute_total_loss(
     lambda_sparsity: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    total = CrossEntropy + lambda * sum(sigmoid(gate_scores))
+    total = CrossEntropy + lambda * sum(sigmoid(gate_scores)).
 
-    L1 on sigmoid outputs maintains a constant-magnitude gradient near zero,
-    so the optimiser keeps pushing gates to exactly zero (unlike L2, whose
-    gradient vanishes as gate → 0, leaving near-zero but not zero gates).
+    L1 on sigmoid outputs keeps a constant-size gradient near zero. That lets
+    the optimiser keep pushing gates all the way to zero. L2 behaves differently:
+    as a gate goes to zero, its gradient fades, so gates can stay near zero
+    without reaching it.
     """
     ce_loss = F.cross_entropy(logits, labels)
     sp_loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
 
     for m in model.modules():
         if isinstance(m, PrunableLinear):
-            # Must recompute sigmoid here (not get_gates) to keep grad path alive
+            # Recompute sigmoid here instead of using get_gates, so gradients still flow.
             sp_loss = sp_loss + torch.sigmoid(m.gate_scores).sum()
 
     return ce_loss + lambda_sparsity * sp_loss, ce_loss, sp_loss
 
 
 def sparsity_level(model: nn.Module, threshold: float = SPARSITY_THRESHOLD) -> float:
-    """Fraction of gates below threshold — functionally pruned weights."""
+    """Fraction of gates below the threshold, meaning weights that are effectively pruned."""
     total, pruned = 0, 0
     for m in model.modules():
         if isinstance(m, PrunableLinear):
@@ -118,7 +119,7 @@ def sparsity_level(model: nn.Module, threshold: float = SPARSITY_THRESHOLD) -> f
 
 
 def plot_gate_distribution(model: nn.Module, lambda_val: float) -> None:
-    """Histogram of all gate values; bimodal = healthy pruning."""
+    """Plot all gate values. A bimodal shape means pruning is working well."""
     gates_np = np.concatenate([
         m.get_gates().cpu().numpy().ravel()
         for m in model.modules() if isinstance(m, PrunableLinear)
