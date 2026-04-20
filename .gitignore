@@ -1,4 +1,10 @@
-.CLAUDE.md
+data/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.claude/
+CLAUDE.md
 PRD_SelfPruningNN_Tredence.pdf
-/CLAUDE.md
-.venv
