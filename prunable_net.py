@@ -149,7 +149,8 @@ def build_dataloaders(batch_size: int) -> tuple[DataLoader, DataLoader]:
     )
     train_loader = DataLoader(
         torchvision.datasets.CIFAR10('./data', train=True,  download=True,
-            transform=transforms.Compose([transforms.RandomHorizontalFlip(),
+            transform=transforms.Compose([transforms.RandomCrop(32, padding=4),
+                                          transforms.RandomHorizontalFlip(),
                                           transforms.ToTensor(), normalize])),
         batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True,
     )

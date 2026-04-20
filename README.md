@@ -32,9 +32,9 @@ batch size 128). CIFAR-10 is downloaded automatically to `./data/`.
 | Lambda | Test Accuracy | Sparsity | Gate Distribution |
 |--------|:-------------:|:--------:|:-----------------:|
 | `1e-4` | 60.57% | 0.00% | ![lam=1e-4](plots/gate_dist_1e-04.png) |
-| `1e-3` | 61.09% | 94.42% | ![lam=1e-3](plots/gate_dist_1e-03.png) |
-| `1e-2` | 60.54% | 99.99% | ![lam=1e-2](plots/gate_dist_1e-02.png) |
-| `1e-1` | 60.82% | 100.00% | ![lam=1e-1](plots/gate_dist_1e-01.png) |
+| `1e-3` | 64.42% | 97.11% | ![lam=1e-3](plots/gate_dist_1e-03.png) |
+| `1e-2` | 63.78% | 99.99% | ![lam=1e-2](plots/gate_dist_1e-02.png) |
+| `1e-1` | 63.83% | 100.00% | ![lam=1e-1](plots/gate_dist_1e-01.png) |
 
 See [report.md](report.md) for full method explanation and analysis.
 
