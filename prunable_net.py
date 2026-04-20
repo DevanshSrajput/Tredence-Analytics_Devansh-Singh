@@ -430,12 +430,68 @@ def run_experiment(
     print(f'\n  → Test Accuracy : {test_acc:.2f}%')
     print(f'  → Sparsity      : {sp * 100:.2f}%  (gates < {SPARSITY_THRESHOLD})')
 
+    # Save gate distribution histogram for this lambda run
+    plot_gate_distribution(model, lambda_val)
+
     return {
         'lambda':   lambda_val,
         'test_acc': test_acc,
         'sparsity': sp * 100.0,
         'model':    model,
     }
+
+
+def plot_gate_distribution(model: nn.Module, lambda_val: float) -> None:
+    """
+    Histogram of all sigmoid gate values across every PrunableLinear layer.
+
+    A well-trained model shows a bimodal distribution:
+      * Spike near 0   — weights pruned by L1 pressure (gate ≈ 0, dead weight)
+      * Cluster near 1 — weights kept active (gate ≈ 1, full contribution)
+
+    The vertical red line marks the 0.01 sparsity threshold used by
+    sparsity_level().  Gates left of the line are counted as pruned.
+
+    Saved as:  gate_dist_<lambda>.png  (e.g. gate_dist_1e-03.png)
+
+    Args:
+        model:      Trained SelfPruningNet.
+        lambda_val: Lambda used during training — embedded in filename + title.
+    """
+    all_gates: list[np.ndarray] = []
+
+    for module in model.modules():
+        if isinstance(module, PrunableLinear):
+            # Flatten each layer's (out, in) gate tensor to 1-D
+            all_gates.append(module.get_gates().cpu().numpy().ravel())
+
+    # Single flat array over all layers and all weights
+    gates_np = np.concatenate(all_gates)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(gates_np, bins=50, color='steelblue', edgecolor='white', linewidth=0.4)
+
+    # Threshold line — gates left of this are counted as pruned
+    ax.axvline(
+        x=SPARSITY_THRESHOLD, color='crimson',
+        linestyle='--', linewidth=1.8, label=f'threshold={SPARSITY_THRESHOLD}'
+    )
+
+    pruned_pct = (gates_np < SPARSITY_THRESHOLD).mean() * 100
+    ax.set_xlabel('Gate value  sigmoid(gate_score)', fontsize=12)
+    ax.set_ylabel('Weight count', fontsize=12)
+    ax.set_title(
+        f'Gate distribution  —  λ = {lambda_val:.1e}   '
+        f'({pruned_pct:.1f}% pruned)',
+        fontsize=13,
+    )
+    ax.legend(fontsize=11)
+    plt.tight_layout()
+
+    fname = f'gate_dist_{lambda_val:.0e}.png'
+    plt.savefig(fname, dpi=150)
+    plt.close(fig)   # free memory — important when running 3 experiments back-to-back
+    print(f'  [plot] saved {fname}')
 
 
 def print_results_table(results: list[dict]) -> None:
