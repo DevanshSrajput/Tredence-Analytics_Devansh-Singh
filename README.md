@@ -24,22 +24,24 @@ pip install -r requirements.txt
 python prunable_net.py
 ```
 
-Trains three times with `λ ∈ [1e-4, 1e-3, 1e-2]` (25 epochs each, Adam lr=1e-3,
+Trains three times with `λ ∈ [1e-3, 1e-2, 1e-1]` (50 epochs each, Adam lr=1e-3,
 batch size 128). CIFAR-10 is downloaded automatically to `./data/`.
-
-Outputs:
-- Results summary table in stdout
-- `gate_dist_1e-04.png`, `gate_dist_1e-03.png`, `gate_dist_1e-02.png`
 
 ## Results
 
-See [report.md](report.md) for method explanation, results table, and gate
-distribution analysis.
+| Lambda | Test Accuracy | Sparsity | Gate Distribution |
+|--------|:-------------:|:--------:|:-----------------:|
+| `1e-3` | 61.09% | 94.42% | ![lam=1e-3](plots/gate_dist_1e-03.png) |
+| `1e-2` | 60.54% | 99.99% | ![lam=1e-2](plots/gate_dist_1e-02.png) |
+| `1e-1` | 60.82% | 100.00% | ![lam=1e-1](plots/gate_dist_1e-01.png) |
+
+See [report.md](report.md) for full method explanation and analysis.
 
 ## Repo structure
 
 ```
 prunable_net.py   # PrunableLinear, SelfPruningNet, training loop, plot utility
-report.md         # Method, results table, analysis, gate distribution plot
+report.md         # Method, results table, analysis
+plots/            # Gate distribution histograms per lambda
 requirements.txt  # torch, torchvision, numpy, matplotlib
 ```

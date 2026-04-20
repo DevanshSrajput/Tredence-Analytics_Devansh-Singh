@@ -135,7 +135,8 @@ def plot_gate_distribution(model: nn.Module, lambda_val: float) -> None:
     ax.legend(fontsize=11)
     plt.tight_layout()
 
-    fname = f'gate_dist_{lambda_val:.0e}.png'
+    import os; os.makedirs('plots', exist_ok=True)
+    fname = f'plots/gate_dist_{lambda_val:.0e}.png'
     plt.savefig(fname, dpi=150)
     plt.close(fig)
     print(f'  [plot] saved {fname}')
