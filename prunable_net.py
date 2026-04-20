@@ -118,3 +118,81 @@ class PrunableLinear(nn.Module):
     def extra_repr(self) -> str:
         """Human-readable layer description shown in print(model)."""
         return f'in_features={self.in_features}, out_features={self.out_features}'
+
+
+# ===========================================================================
+# PART 2 — Loss functions: sparsity regularisation
+# ===========================================================================
+
+def compute_total_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    model: nn.Module,
+    lambda_sparsity: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Total loss = CrossEntropy(logits, labels) + lambda * L1(sigmoid_gates).
+
+    Why L1 on sigmoid(gate_scores) drives sparsity — not L2:
+      L1 penalty:  d/dg |sigmoid(g)| = sigmoid'(g)  — constant-sign, non-zero
+                   even when sigmoid(g) is tiny.  The optimiser receives a
+                   steady push toward zero, ultimately reaching it.
+      L2 penalty:  d/dg sigmoid(g)^2 = 2*sigmoid(g)*sigmoid'(g)  — shrinks as
+                   the gate approaches zero, so the gradient vanishes and the
+                   gate hovers near-zero but never reaches it.  No exact zeros.
+
+    Summing sigmoid(gate_scores) across all PrunableLinear layers gives the
+    "expected number of active weights".  Minimising this sum with coefficient
+    lambda trades off accuracy against sparsity.
+
+    Args:
+        logits:           Raw model outputs, shape (B, num_classes).
+        labels:           Ground-truth class indices, shape (B,).
+        model:            nn.Module that may contain PrunableLinear layers.
+        lambda_sparsity:  Scalar regularisation strength (lambda).
+
+    Returns:
+        total_loss:  Scalar to call .backward() on.
+        ce_loss:     Cross-entropy component (for logging).
+        sp_loss:     Raw sparsity sum before lambda scaling (for logging).
+    """
+    ce_loss = F.cross_entropy(logits, labels)
+
+    # Start accumulator on the same device as logits so no device mismatch
+    sp_loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
+
+    for module in model.modules():
+        if isinstance(module, PrunableLinear):
+            # Recompute sigmoid inside the loop — keeps the gradient path to
+            # gate_scores alive inside the loss computation graph.
+            # Using module.get_gates() would detach and kill the gradient.
+            sp_loss = sp_loss + torch.sigmoid(module.gate_scores).sum()
+
+    total_loss = ce_loss + lambda_sparsity * sp_loss
+    return total_loss, ce_loss, sp_loss
+
+
+def sparsity_level(model: nn.Module, threshold: float = 1e-2) -> float:
+    """
+    Fraction of gates that are effectively pruned (gate value < threshold).
+
+    A gate with sigmoid(score) < 0.01 scales its weight by less than 1% —
+    that weight is functionally inactive.  This is the reported sparsity metric.
+
+    Args:
+        model:     nn.Module containing PrunableLinear layers.
+        threshold: Gate value below which a weight is counted as pruned.
+
+    Returns:
+        Sparsity ratio in [0.0, 1.0].  Multiply by 100 for percentage.
+    """
+    total  = 0
+    pruned = 0
+
+    for module in model.modules():
+        if isinstance(module, PrunableLinear):
+            gates   = module.get_gates()          # detached, no grad cost
+            total  += gates.numel()
+            pruned += (gates < threshold).sum().item()
+
+    return pruned / total if total > 0 else 0.0
