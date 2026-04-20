@@ -257,3 +257,218 @@ class SelfPruningNet(nn.Module):
         x = self.fc4(x)                      # (B,   10)
 
         return x
+
+
+# ===========================================================================
+# PART 3B — Training loop + evaluation
+# ===========================================================================
+
+# --- Hyperparameters (change here, not scattered through the code) ----------
+LAMBDA_VALUES = [1e-4, 1e-3, 1e-2]   # low / medium / high sparsity pressure
+BATCH_SIZE    = 128
+EPOCHS        = 25
+LR            = 1e-3
+SPARSITY_THRESHOLD = 1e-2             # gate < 0.01 → weight counted as pruned
+# ---------------------------------------------------------------------------
+
+
+def build_dataloaders(batch_size: int) -> tuple[DataLoader, DataLoader]:
+    """
+    CIFAR-10 train and test dataloaders.
+
+    Training transform: RandomHorizontalFlip + Normalize.
+    Test transform:     Normalize only (deterministic).
+
+    CIFAR-10 channel statistics (mean/std per channel, pre-computed):
+        mean = (0.4914, 0.4822, 0.4465)
+        std  = (0.2470, 0.2435, 0.2616)
+    """
+    normalize = transforms.Normalize(
+        mean=(0.4914, 0.4822, 0.4465),
+        std =(0.2470, 0.2435, 0.2616),
+    )
+
+    train_transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    train_set = torchvision.datasets.CIFAR10(
+        root='./data', train=True,  download=True, transform=train_transform
+    )
+    test_set  = torchvision.datasets.CIFAR10(
+        root='./data', train=False, download=True, transform=test_transform
+    )
+
+    train_loader = DataLoader(
+        train_set, batch_size=batch_size, shuffle=True,
+        num_workers=2, pin_memory=True,
+    )
+    test_loader = DataLoader(
+        test_set, batch_size=batch_size, shuffle=False,
+        num_workers=2, pin_memory=True,
+    )
+    return train_loader, test_loader
+
+
+def train_one_epoch(
+    model:            nn.Module,
+    loader:           DataLoader,
+    optimizer:        torch.optim.Optimizer,
+    lambda_sparsity:  float,
+    device:           torch.device,
+) -> tuple[float, float]:
+    """
+    One full pass over the training set.
+
+    Returns:
+        avg_ce_loss:  Mean cross-entropy loss across batches.
+        avg_sp_loss:  Mean raw sparsity loss across batches (before lambda).
+    """
+    model.train()
+    total_ce = 0.0
+    total_sp = 0.0
+
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+
+        optimizer.zero_grad()
+
+        logits = model(images)
+        loss, ce_loss, sp_loss = compute_total_loss(
+            logits, labels, model, lambda_sparsity
+        )
+
+        loss.backward()
+        optimizer.step()
+
+        # Accumulate scalar values — detach implicitly via .item()
+        total_ce += ce_loss.item()
+        total_sp += sp_loss.item()
+
+    n = len(loader)
+    return total_ce / n, total_sp / n
+
+
+@torch.no_grad()
+def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
+    """
+    Compute top-1 test accuracy (%) over the full loader.
+
+    @torch.no_grad() disables gradient tracking for the entire function,
+    saving memory and compute during inference.
+    """
+    model.eval()
+    correct = 0
+    total   = 0
+
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+        preds    = model(images).argmax(dim=1)
+        correct += (preds == labels).sum().item()
+        total   += labels.size(0)
+
+    return 100.0 * correct / total
+
+
+def run_experiment(
+    lambda_val:   float,
+    train_loader: DataLoader,
+    test_loader:  DataLoader,
+    device:       torch.device,
+) -> dict:
+    """
+    Full training + evaluation run for a single lambda value.
+
+    A fresh model and optimiser are created for every call so that
+    no parameter state leaks between lambda experiments.
+
+    Returns:
+        dict with keys: lambda, test_acc, sparsity, model.
+    """
+    print(f'\n{"="*62}')
+    print(f'  Experiment  λ = {lambda_val:.1e}')
+    print(f'{"="*62}')
+
+    # Fresh init — critical for a fair comparison across lambda values
+    model     = SelfPruningNet().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+
+    # CosineAnnealingLR gently decays LR to near-zero by epoch EPOCHS,
+    # stabilising late-stage training without aggressive step drops.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=EPOCHS, eta_min=1e-5
+    )
+
+    for epoch in range(1, EPOCHS + 1):
+        avg_ce, avg_sp = train_one_epoch(
+            model, train_loader, optimizer, lambda_val, device
+        )
+        scheduler.step()
+
+        # Log every 5 epochs to keep stdout readable
+        if epoch % 5 == 0 or epoch == 1:
+            sp_pct = sparsity_level(model, SPARSITY_THRESHOLD) * 100
+            print(
+                f'  Epoch {epoch:2d}/{EPOCHS} | '
+                f'CE: {avg_ce:.4f} | '
+                f'SpLoss: {avg_sp:9.1f} | '
+                f'Sparsity: {sp_pct:5.1f}% | '
+                f'LR: {scheduler.get_last_lr()[0]:.2e}'
+            )
+
+    # ---- Final evaluation --------------------------------------------------
+    test_acc = evaluate(model, test_loader, device)
+    sp       = sparsity_level(model, SPARSITY_THRESHOLD)
+
+    print(f'\n  → Test Accuracy : {test_acc:.2f}%')
+    print(f'  → Sparsity      : {sp * 100:.2f}%  (gates < {SPARSITY_THRESHOLD})')
+
+    return {
+        'lambda':   lambda_val,
+        'test_acc': test_acc,
+        'sparsity': sp * 100.0,
+        'model':    model,
+    }
+
+
+def print_results_table(results: list[dict]) -> None:
+    """Formatted summary table printed after all experiments finish."""
+    print(f'\n{"="*62}')
+    print('  RESULTS SUMMARY')
+    print(f'{"="*62}')
+    print(f'  {"Lambda":<12}  {"Test Acc (%)":>14}  {"Sparsity (%)":>14}')
+    print(f'  {"-"*44}')
+    for r in results:
+        print(
+            f'  {r["lambda"]:<12.1e}  '
+            f'{r["test_acc"]:>14.2f}  '
+            f'{r["sparsity"]:>14.2f}'
+        )
+    print(f'{"="*62}\n')
+
+
+def main() -> None:
+    """Entry point: builds dataloaders, runs all lambda experiments, prints table."""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f'Device: {device}')
+
+    # Build dataloaders once — reused across all three lambda experiments
+    train_loader, test_loader = build_dataloaders(BATCH_SIZE)
+
+    results = []
+    for lam in LAMBDA_VALUES:
+        result = run_experiment(lam, train_loader, test_loader, device)
+        results.append(result)
+
+    print_results_table(results)
+
+
+if __name__ == '__main__':
+    main()
