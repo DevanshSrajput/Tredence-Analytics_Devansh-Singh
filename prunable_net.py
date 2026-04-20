@@ -196,3 +196,64 @@ def sparsity_level(model: nn.Module, threshold: float = 1e-2) -> float:
             pruned += (gates < threshold).sum().item()
 
     return pruned / total if total > 0 else 0.0
+
+
+# ===========================================================================
+# PART 3A — Model: SelfPruningNet
+# ===========================================================================
+
+class SelfPruningNet(nn.Module):
+    """
+    4-layer feed-forward network for CIFAR-10 using only PrunableLinear.
+
+    Architecture:
+        Flatten → PrunableLinear(3072, 1024) → BN1d → ReLU
+                → PrunableLinear(1024,  512) → BN1d → ReLU
+                → PrunableLinear( 512,  256) → BN1d → ReLU
+                → PrunableLinear( 256,   10)          [logits]
+
+    Design notes:
+      * BatchNorm placed BEFORE ReLU (pre-activation style per the PRD spec).
+        BN normalises the pre-activation distribution, keeping gates meaningful
+        across the full range of weight magnitudes.
+      * No dropout — gate sparsity acts as the sole regulariser.  When a gate
+        collapses to ~0 it zeros that weight's contribution for every sample,
+        which is structurally similar to weight-level dropout but learned.
+      * No BN after the final PrunableLinear — logits fed raw to cross-entropy.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+        # Layer 1: 3072 → 1024  (CIFAR-10: 32×32×3 = 3072 when flattened)
+        self.fc1 = PrunableLinear(3072, 1024)
+        self.bn1 = nn.BatchNorm1d(1024)
+
+        # Layer 2: 1024 → 512
+        self.fc2 = PrunableLinear(1024, 512)
+        self.bn2 = nn.BatchNorm1d(512)
+
+        # Layer 3: 512 → 256
+        self.fc3 = PrunableLinear(512, 256)
+        self.bn3 = nn.BatchNorm1d(256)
+
+        # Output layer: 256 → 10  (no BN — raw logits into cross-entropy)
+        self.fc4 = PrunableLinear(256, 10)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Raw CIFAR-10 images, shape (B, 3, 32, 32).
+
+        Returns:
+            Logits, shape (B, 10).
+        """
+        # Flatten all spatial/channel dims into one feature vector per sample
+        x = x.view(x.size(0), -1)           # (B, 3072)
+
+        x = F.relu(self.bn1(self.fc1(x)))   # (B, 1024)
+        x = F.relu(self.bn2(self.fc2(x)))   # (B,  512)
+        x = F.relu(self.bn3(self.fc3(x)))   # (B,  256)
+        x = self.fc4(x)                      # (B,   10)
+
+        return x
